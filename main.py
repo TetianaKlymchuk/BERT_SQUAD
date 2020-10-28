@@ -274,3 +274,137 @@ write_predictions(
     output_nbest_file,
     output_null_log_odds_file,
     verbose=False)
+
+
+# Home-made prediction
+
+''' We will concatenate the question and the context, separated by a `["SEP"]`, after tokenization, as it has been made for the training set.
+The important thing is that we want our answer to start with a real word and to end with a real word. 
+The word "ecologically" being tokenized as `["ecological", "##ly"]`, if the ending token is `["ecological"]` 
+we want to use "ecologically" as the ending word (same thing if the ending token is `["##ly"]`). 
+That is why we first split our context into words, and then into tokens, remembering to which word each token 
+belongs to (see the `tokenize_context()` function). '''
+
+my_bert_layer = hub.KerasLayer(
+    "https://tfhub.dev/tensorflow/bert_en_uncased_L-12_H-768_A-12/1",
+    trainable=False)
+vocab_file = my_bert_layer.resolved_object.vocab_file.asset_path.numpy()
+do_lower_case = my_bert_layer.resolved_object.do_lower_case.numpy()
+tokenizer = FullTokenizer(vocab_file, do_lower_case)
+
+
+def is_whitespace(c):
+    '''
+    Tell if a chain of characters corresponds to a whitespace or not.
+    '''
+    if c == " " or c == "\t" or c == "\r" or c == "\n" or ord(c) == 0x202F:
+        return True
+    return False
+
+
+def whitespace_split(text):
+    '''
+    Take a text and return a list of "words" by splitting it according to
+    whitespaces.
+    '''
+    doc_tokens = []
+    prev_is_whitespace = True
+    for c in text:
+        if is_whitespace(c):
+            prev_is_whitespace = True
+        else:
+            if prev_is_whitespace:
+                doc_tokens.append(c)
+            else:
+                doc_tokens[-1] += c
+            prev_is_whitespace = False
+    return doc_tokens
+
+
+def tokenize_context(text_words):
+    '''
+    Take a list of words (returned by whitespace_split()) and tokenize each word
+    one by one. Also keep track, for each new token, of its original word in the
+    text_words parameter.
+    '''
+    text_tok = []
+    tok_to_word_id = []
+    for word_id, word in enumerate(text_words):
+        word_tok = tokenizer.tokenize(word)
+        text_tok += word_tok
+        tok_to_word_id += [word_id]*len(word_tok)
+    return text_tok, tok_to_word_id
+
+def get_ids(tokens):
+    return tokenizer.convert_tokens_to_ids(tokens)
+
+def get_mask(tokens):
+    return np.char.not_equal(tokens, "[PAD]").astype(int)
+
+def get_segments(tokens):
+    seg_ids = []
+    current_seg_id = 0
+    for tok in tokens:
+        seg_ids.append(current_seg_id)
+        if tok == "[SEP]":
+            current_seg_id = 1-current_seg_id # turns 1 into 0 and vice versa
+    return seg_ids
+
+
+def create_input_dict(question, context):
+    '''
+    Take a question and a context as strings and return a dictionary with the 3
+    elements needed for the model. Also return the context_words, the
+    context_tok to context_word ids correspondance and the length of
+    question_tok that we will need later.
+    '''
+    question_tok = tokenizer.tokenize(my_question)
+
+    context_words = whitespace_split(context)
+    context_tok, context_tok_to_word_id = tokenize_context(context_words)
+
+    input_tok = question_tok + ["[SEP]"] + context_tok + ["[SEP]"]
+    input_tok += ["[PAD]"]*(384-len(input_tok)) # in our case the model has been
+                                                # trained to have inputs of length max 384
+    input_dict = {}
+    input_dict["input_word_ids"] = tf.expand_dims(tf.cast(get_ids(input_tok), tf.int32), 0)
+    input_dict["input_mask"] = tf.expand_dims(tf.cast(get_mask(input_tok), tf.int32), 0)
+    input_dict["input_type_ids"] = tf.expand_dims(tf.cast(get_segments(input_tok), tf.int32), 0)
+
+    return input_dict, context_words, context_tok_to_word_id, len(question_tok)
+
+
+    # Creation
+
+my_context = '''Neoclassical economics views inequalities in the distribution of income as arising from differences in value added by labor, capital and land. Within labor income distribution is due to differences in value added by different classifications of workers. In this perspective, wages and profits are determined by the marginal value added of each economic actor (worker, capitalist/business owner, landlord). 
+    Thus, in a market economy, inequality is a reflection of the productivity gap between highly-paid professions and lower-paid professions.'''
+
+my_input_dict, my_context_words, context_tok_to_word_id, question_tok_len = create_input_dict(my_question, my_context)
+
+    # Interpretation
+
+start_logits_context = start_logits.numpy()[0, question_tok_len+1:]
+end_logits_context = end_logits.numpy()[0, question_tok_len+1:]
+
+start_word_id = context_tok_to_word_id[np.argmax(start_logits_context)]
+end_word_id = context_tok_to_word_id[np.argmax(end_logits_context)]
+
+
+pair_scores = np.ones((len(start_logits_context), len(end_logits_context)))*(-1E10)
+for i in range(len(start_logits_context-1)):
+    for j in range(i, len(end_logits_context)):
+        pair_scores[i, j] = start_logits_context[i] + end_logits_context[j]
+pair_scores_argmax = np.argmax(pair_scores)
+
+start_word_id = context_tok_to_word_id[pair_scores_argmax // len(start_logits_context)]
+end_word_id = context_tok_to_word_id[pair_scores_argmax % len(end_logits_context)]
+
+# Final answer
+
+predicted_answer = ' '.join(my_context_words[start_word_id:end_word_id+1])
+print("The answer to:\n" + my_question + "\nis:\n" + predicted_answer)
+
+from IPython.core.display import HTML
+display(HTML(f'<h2>{my_question.upper()}</h2>'))
+marked_text = str(my_context.replace(predicted_answer, f"<mark>{predicted_answer}</mark>"))
+display(HTML(f"""<blockquote> {marked_text} </blockquote>"""))
