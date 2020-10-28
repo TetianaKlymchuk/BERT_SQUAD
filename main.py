@@ -229,3 +229,48 @@ eval_dataset = create_squad_dataset(
     384,#input_meta_data['max_seq_length'],
     BATCH_SIZE,
     is_training=False)
+
+# Making the predictions
+
+RawResult = collections.namedtuple("RawResult",
+                                   ["unique_id", "start_logits", "end_logits"])
+
+def get_raw_results(predictions):
+    for unique_ids, start_logits, end_logits in zip(predictions['unique_ids'],
+                                                    predictions['start_logits'],
+                                                    predictions['end_logits']):
+        yield RawResult(
+            unique_id=unique_ids.numpy(),
+            start_logits=start_logits.numpy().tolist(),
+            end_logits=end_logits.numpy().tolist())
+
+
+all_results = []
+for count, inputs in enumerate(eval_dataset):
+    x, _ = inputs
+    unique_ids = x.pop("unique_ids")
+    start_logits, end_logits = bert_squad(x, training=False)
+    output_dict = dict(
+        unique_ids=unique_ids,
+        start_logits=start_logits,
+        end_logits=end_logits)
+    for result in get_raw_results(output_dict):
+        all_results.append(result)
+    if count % 100 == 0:
+        print("{}/{}".format(count, 2709))
+
+output_prediction_file = "/content/drive/My Drive/BERT/data/squad/predictions.json"
+output_nbest_file = "/content/drive/My Drive/BERT/data/squad/nbest_predictions.json"
+output_null_log_odds_file = "/content/drive/My Drive/BERT/data/squad/null_odds.json"
+
+write_predictions(
+    eval_examples,
+    eval_features,
+    all_results,
+    20,
+    30,
+    True,
+    output_prediction_file,
+    output_nbest_file,
+    output_null_log_odds_file,
+    verbose=False)
