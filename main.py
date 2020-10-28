@@ -152,3 +152,35 @@ ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=1)
 if ckpt_manager.latest_checkpoint:
     ckpt.restore(ckpt_manager.latest_checkpoint)
     print("Latest checkpoint restored!!")
+
+
+# Custom training
+
+for epoch in range(NB_EPOCHS):
+    print("Start of epoch {}".format(epoch+1))
+    start = time.time()
+    
+    train_loss.reset_states()
+    
+    for (batch, (inputs, targets)) in enumerate(train_dataset_light):
+        with tf.GradientTape() as tape:
+            model_outputs = bert_squad(inputs)
+            loss = squad_loss_fn(targets, model_outputs)
+        
+        gradients = tape.gradient(loss, bert_squad.trainable_variables)
+        optimizer.apply_gradients(zip(gradients, bert_squad.trainable_variables))
+        print("RAS")
+        
+        train_loss(loss)
+        
+        if batch % 50 == 0:
+            print("Epoch {} Batch {} Loss {:.4f}".format(
+                epoch+1, batch, train_loss.result()))
+        
+        if batch % 500 == 0:
+            ckpt_save_path = ckpt_manager.save()
+            print("Saving checkpoint for epoch {} at {}".format(epoch+1,
+                                                                ckpt_save_path))
+    print("Time taken for 1 epoch: {} secs\n".format(time.time() - start))
+
+
