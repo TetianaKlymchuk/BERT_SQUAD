@@ -184,3 +184,48 @@ for epoch in range(NB_EPOCHS):
     print("Time taken for 1 epoch: {} secs\n".format(time.time() - start))
 
 
+# Evaluation
+
+eval_examples = read_squad_examples(
+    "/content/drive/My Drive/BERT/data/squad/dev-v1.1.json",
+    is_training=False,
+    version_2_with_negative=False)
+
+eval_writer = FeatureWriter(
+    filename=os.path.join("/content/drive/My Drive/BERT/data/squad/",
+                          "eval.tf_record"),
+    is_training=False)
+
+my_bert_layer = hub.KerasLayer(
+    "https://tfhub.dev/tensorflow/bert_en_uncased_L-12_H-768_A-12/1",
+    trainable=False)
+vocab_file = my_bert_layer.resolved_object.vocab_file.asset_path.numpy()
+do_lower_case = my_bert_layer.resolved_object.do_lower_case.numpy()
+tokenizer = FullTokenizer(vocab_file, do_lower_case)
+
+def _append_feature(feature, is_padding):
+    if not is_padding:
+        eval_features.append(feature)
+    eval_writer.process_feature(feature)
+
+
+eval_features = []
+dataset_size = convert_examples_to_features(
+    examples=eval_examples,
+    tokenizer=tokenizer,
+    max_seq_length=384,
+    doc_stride=128,
+    max_query_length=64,
+    is_training=False,
+    output_fn=_append_feature,
+    batch_size=4)
+
+eval_writer.close()
+
+BATCH_SIZE = 4
+
+eval_dataset = create_squad_dataset(
+    "/content/drive/My Drive/BERT/data/squad/eval.tf_record",
+    384,#input_meta_data['max_seq_length'],
+    BATCH_SIZE,
+    is_training=False)
