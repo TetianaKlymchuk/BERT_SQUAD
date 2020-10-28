@@ -408,3 +408,34 @@ from IPython.core.display import HTML
 display(HTML(f'<h2>{my_question.upper()}</h2>'))
 marked_text = str(my_context.replace(predicted_answer, f"<mark>{predicted_answer}</mark>"))
 display(HTML(f"""<blockquote> {marked_text} </blockquote>"""))
+
+
+# One-click prediction
+
+cmy_input_dict, my_context_words, context_tok_to_word_id, question_tok_len = create_input_dict(my_question, my_context)
+
+start_logits, end_logits = bert_squad(my_input_dict, training=False)
+
+#removing the ids corresponding to the question and the ["SEP"] token:
+start_logits_context = start_logits.numpy()[0, question_tok_len+1:]
+end_logits_context = end_logits.numpy()[0, question_tok_len+1:]
+
+#making sure that the start of the answer is before the end:
+pair_scores = np.ones((len(start_logits_context), len(end_logits_context)))*(-1E10)
+for i in range(len(start_logits_context-1)):
+    for j in range(i, len(end_logits_context)):
+        pair_scores[i, j] = start_logits_context[i] + end_logits_context[j]
+pair_scores_argmax = np.argmax(pair_scores)
+
+start_word_id = context_tok_to_word_id[pair_scores_argmax // len(start_logits_context)]
+end_word_id = context_tok_to_word_id[pair_scores_argmax % len(end_logits_context)]
+
+print(start_word_id)
+print(end_word_id)
+predicted_answer = ' '.join(my_context_words[start_word_id:end_word_id+1])
+print(predicted_answer)
+#print answer beautifully
+from IPython.core.display import HTML
+display(HTML(f'<h2>{my_question.upper()}</h2>'))
+marked_text = str(my_context.replace(predicted_answer, f"<mark>{predicted_answer}</mark>"))
+display(HTML(f"""<blockquote> {marked_text} </blockquote>"""))
